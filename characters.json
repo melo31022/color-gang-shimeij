@@ -1,29 +1,15 @@
 {
+  "source": "Skittlq/alan-beckers-stickfigures-unofficial",
+  "source_commit": "6e32aeb3956912c1d7d8396d885cb2b61be63193",
   "characters": [
-    {
-      "id": "blue",
-      "name": "Blue",
-      "sprite": "Blue_front-facing_idle.png"
-    },
-    {
-      "id": "green",
-      "name": "Green",
-      "sprite": "Green_front-facing_idle.png"
-    },
-    {
-      "id": "red",
-      "name": "Red",
-      "sprite": "Red_front-facing_idle.png"
-    },
-    {
-      "id": "the_second_coming",
-      "name": "The Second Coming",
-      "sprite": "The_Second_Coming_front-facing_idle.png"
-    },
-    {
-      "id": "yellow",
-      "name": "Yellow",
-      "sprite": "Yellow-_front-facing_idle.png"
-    }
+    {"id": "Blue", "name": "Blue"},
+    {"id": "Green", "name": "Green"},
+    {"id": "Orange", "name": "Orange"},
+    {"id": "Purple", "name": "Purple"},
+    {"id": "Red", "name": "Red"},
+    {"id": "TCO", "name": "The Second Coming"},
+    {"id": "TDL", "name": "The Dark Lord"},
+    {"id": "Yellow", "name": "Yellow"},
+    {"id": "victim", "name": "Victim"}
   ]
 }

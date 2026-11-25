@@ -1,62 +1,143 @@
-"""Configuration and character catalogue helpers."""
+"""Parse Shimeji-ee character animation definitions."""
 from __future__ import annotations
 
-import json
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
 
 
 @dataclass(frozen=True)
-class Character:
+class AnimationFrame:
+    image: Path
+    duration_ms: int
+    velocity_x: float
+    velocity_y: float
+    anchor_x: int
+    anchor_y: int
+
+
+@dataclass(frozen=True)
+class CharacterAssets:
     character_id: str
-    name: str
-    sprite: Path
+    display_name: str
+    folder: Path
+    animations: dict[str, tuple[AnimationFrame, ...]]
+
+    def clip(self, name: str) -> tuple[AnimationFrame, ...]:
+        return self.animations.get(name, self.animations.get("Stand", ()))
 
 
-def load_catalog(project_root: Path) -> list[Character]:
-    """Load characters.json and validate each sprite path."""
-    catalog_path = project_root / "characters.json"
+def _local_name(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _pair(value: str | None, default: tuple[float, float]) -> tuple[float, float]:
+    if not value:
+        return default
     try:
-        data: dict[str, Any] = json.loads(catalog_path.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise FileNotFoundError(f"Catalogue not found: {catalog_path}") from exc
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"Invalid JSON in {catalog_path}: {exc}") from exc
+        first, second = value.split(",", 1)
+        return float(first.strip()), float(second.strip())
+    except (ValueError, TypeError):
+        return default
 
-    records = data.get("characters")
-    if not isinstance(records, list) or not records:
-        raise ValueError("characters.json must contain a non-empty 'characters' list.")
 
-    characters: list[Character] = []
-    seen_ids: set[str] = set()
+def parse_actions_xml(
+    xml_text: str,
+    character_folder: Path,
+    character_id: str,
+    display_name: str,
+) -> CharacterAssets:
+    """Convert source actions.xml Pose lists into Python animation clips."""
+    root = ET.fromstring(xml_text.lstrip("\ufeff"))
+    clips: dict[str, tuple[AnimationFrame, ...]] = {}
 
-    for index, record in enumerate(records, start=1):
-        if not isinstance(record, dict):
-            raise ValueError(f"Character entry #{index} must be a JSON object.")
+    for action in root.iter():
+        if _local_name(action.tag) != "Action":
+            continue
+        action_name = action.attrib.get("Name")
+        if not action_name:
+            continue
 
-        character_id = str(record.get("id", "")).strip()
-        name = str(record.get("name", "")).strip()
-        sprite_name = str(record.get("sprite", "")).strip()
+        # Definitions contain Animation as a direct child. Runtime behavior
+        # sequences use ActionReference nodes and are skipped here.
+        animations = [
+            child for child in list(action)
+            if _local_name(child.tag) == "Animation"
+        ]
+        if not animations:
+            continue
 
-        if not character_id or not name or not sprite_name:
-            raise ValueError(
-                f"Character entry #{index} needs non-empty 'id', 'name' and 'sprite' fields."
-            )
-        if character_id in seen_ids:
-            raise ValueError(f"Duplicate character id: {character_id}")
-        seen_ids.add(character_id)
+        frames: list[AnimationFrame] = []
+        for animation in animations:
+            for pose in animation.iter():
+                if _local_name(pose.tag) != "Pose":
+                    continue
 
-        root = project_root.resolve()
-        sprite = (project_root / sprite_name).resolve()
-        try:
-            sprite.relative_to(root)
-        except ValueError as exc:
-            raise ValueError(f"Sprite path must stay inside the project: {sprite_name}") from exc
+                image_value = pose.attrib.get("Image", "").strip()
+                if not image_value:
+                    continue
 
-        if not sprite.is_file():
-            raise FileNotFoundError(f"Sprite for {name} was not found: {sprite}")
+                image_name = Path(image_value.replace("\\", "/")).name
+                image_path = (character_folder / image_name).resolve()
+                try:
+                    image_path.relative_to(character_folder.resolve())
+                except ValueError:
+                    continue
+                if not image_path.is_file():
+                    continue
 
-        characters.append(Character(character_id, name, sprite))
+                try:
+                    duration_units = float(pose.attrib.get("Duration", "8"))
+                except ValueError:
+                    duration_units = 8.0
 
+                velocity_x, velocity_y = _pair(
+                    pose.attrib.get("Velocity"), (0.0, 0.0)
+                )
+                anchor_x, anchor_y = _pair(
+                    pose.attrib.get("ImageAnchor"), (64.0, 128.0)
+                )
+                frames.append(
+                    AnimationFrame(
+                        image=image_path,
+                        duration_ms=max(16, round(duration_units * 10)),
+                        velocity_x=velocity_x,
+                        velocity_y=velocity_y,
+                        anchor_x=round(anchor_x),
+                        anchor_y=round(anchor_y),
+                    )
+                )
+
+        if frames:
+            clips[action_name] = tuple(frames)
+
+    if not clips:
+        raise ValueError(
+            f"Nenhuma animação válida foi encontrada em "
+            f"{character_folder / 'conf' / 'actions.xml'}"
+        )
+
+    return CharacterAssets(
+        character_id=character_id,
+        display_name=display_name,
+        folder=character_folder,
+        animations=clips,
+    )
+
+
+def load_character_assets(
+    image_root: Path,
+    character_names: dict[str, str],
+) -> list[CharacterAssets]:
+    characters: list[CharacterAssets] = []
+    for character_id, display_name in character_names.items():
+        folder = image_root / character_id
+        actions_path = folder / "conf" / "actions.xml"
+        if not actions_path.is_file():
+            raise FileNotFoundError(f"Arquivo ausente: {actions_path}")
+
+        xml_text = actions_path.read_text(encoding="utf-8-sig")
+        characters.append(
+            parse_actions_xml(xml_text, folder, character_id, display_name)
+        )
     return characters

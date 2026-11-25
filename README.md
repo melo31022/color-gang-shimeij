@@ -1,78 +1,81 @@
-# Color Gang Shimeji (Python)
+# Color Gang Shimeji — Python
 
-Uma adaptação em Python de um aplicativo de mascotes de desktop inspirado no funcionamento do projeto [Alan Becker's Stickfigures Unofficial](https://github.com/Skittlq/alan-beckers-stickfigures-unofficial), usando os sprites Color Gang que já pertencem a este repositório.
+Implementação Python de mascotes de desktop baseada no formato de animações do Shimeji-ee, utilizando os **assets originais** do projeto Skittlq/alan-beckers-stickfigures-unofficial.
 
-> Projeto não oficial e sem afiliação ou endosso de Alan Becker.
+> Projeto não oficial, sem afiliação ou endosso de Alan Becker, Skittlq ou Stickwave.
+
+## Assets utilizados
+
+O aplicativo NÃO utiliza os PNGs estáticos que já existiam na raiz deste repositório. Na primeira execução, ele baixa o arquivo-fonte do repositório original em um commit fixo e extrai somente:
+
+- Os sprites PNG dos nove personagens.
+- actions.xml e behaviors.xml de cada personagem.
+
+Os personagens são Blue, Green, Orange, Purple, Red, The Second Coming, The Dark Lord, Yellow e Victim.
+
+Os assets são armazenados localmente em assets/img/. O projeto original não é clonado como dependência: arquivos Java, JARs, instaladores, classes compiladas e arquivos não relacionados não são extraídos. A versão utilizada está fixada em 6e32aeb3956912c1d7d8396d885cb2b61be63193, evitando mudanças inesperadas no conteúdo baixado.
 
 ## Recursos
 
+- Animações reais construídas a partir das sequências de Pose do actions.xml.
+- Caminhada, corrida, dança, descanso, sentar, deitar e outras animações quando disponíveis para o personagem.
+- Espelhamento dos sprites para mudar a direção do movimento.
 - Personagens em janelas transparentes e sempre no topo da área de trabalho.
-- Movimento horizontal aleatório, pausas e pequenos pulos.
-- Arraste os personagens com o botão esquerdo do mouse.
-- Clique com o botão direito em um personagem para abrir o menu.
-- Adicione várias cópias dos personagens ou remova um deles.
-- Pausar, retomar, trazer os personagens para frente ou encerrar o aplicativo.
-- Configuração simples por JSON.
-- Implementação leve com Python e Tkinter, sem dependências externas.
+- Arrastar personagens com o botão esquerdo do mouse.
+- Menu do botão direito para escolher animações, adicionar personagens, pausar ou remover mascotes.
+- Cache limitado de quadros para reduzir o uso de memória.
+- Configurações em JSON.
 
 ## Requisitos
 
 - Windows 10 ou Windows 11.
 - Python 3.10 ou superior.
-- Tkinter incluído na instalação do Python.
+- Conexão com a internet na primeira execução.
+- Pillow (instalado automaticamente pelo run.bat).
 
 ## Executar
 
-1. Baixe ou clone este repositório.
-2. Execute `run.bat`; ou abra um terminal nesta pasta e rode:
+1. Baixe ou clone a branch python-port.
+2. Extraia os arquivos.
+3. Execute run.bat.
 
-   ```powershell
-   py -3 main.py
-   ```
+Alternativamente, pelo terminal:
 
-Não é necessário instalar pacotes com pip.
+    py -3 -m pip install -r requirements.txt
+    py -3 main.py
+
+Na primeira execução, o programa baixa e prepara os assets. Nas próximas execuções, utiliza o cache local e não precisa baixar tudo novamente.
 
 ## Controles
 
-- **Arrastar com o botão esquerdo:** mover o personagem.
-- **Botão direito:** abrir o menu de opções.
-- **Adicionar personagem:** criar outra cópia de Blue, Green, Red, The Second Coming ou Yellow.
-- **Pausar todos / Retomar todos:** controlar o movimento de todos os mascotes.
-- **Remover:** fechar apenas o personagem selecionado.
-- **Sair:** encerrar o aplicativo.
+- Arrastar com o botão esquerdo: mover o personagem.
+- Botão direito: abrir o menu.
+- Adicionar personagem: criar outro mascote.
+- Animação: escolher uma animação suportada pelo personagem selecionado.
+- Pausar todos / Retomar todos: controlar todos os mascotes.
+- Remover: fechar o mascote selecionado.
+- Sair: encerrar o aplicativo.
 
 ## Configuração
 
-Edite `settings.json` para alterar:
+Edite settings.json:
 
 | Opção | Descrição |
 | --- | --- |
-| `start_all_characters` | Iniciar com todos os cinco personagens. |
-| `max_characters` | Número máximo de janelas de personagens. |
-| `speed` | Velocidade horizontal. |
-| `tick_ms` | Intervalo de atualização em milissegundos. |
-| `gravity` | Gravidade dos pulos. |
-| `jump_strength` | Impulso vertical dos pulos. |
-| `jump_probability` | Chance de pulo em cada atualização. |
+| start_all_characters | Iniciar com todos os nove personagens. |
+| max_characters | Máximo de mascotes simultâneos. |
+| speed | Multiplicador de velocidade. |
+| tick_ms | Intervalo de atualização em milissegundos. |
+| random_action_min_seconds | Menor intervalo entre decisões de comportamento. |
+| random_action_max_seconds | Maior intervalo entre decisões de comportamento. |
+| dance_probability | Chance de incluir dança nas escolhas aleatórias. |
+| sit_probability | Chance de incluir sentar nas escolhas aleatórias. |
 
-Os personagens e seus arquivos de imagem são definidos em `characters.json`. Os caminhos dos sprites são relativos à pasta principal do repositório.
+## Créditos e licença
 
-## Estado desta adaptação
+- Aplicativo de referência e assets: Skittlq/alan-beckers-stickfigures-unofficial.
+- O README original credita Stickwave / @StickLaserPhase pelas animações, comportamentos, ações e sprites.
+- A licença MIT do repositório original está incluída em UPSTREAM_LICENSE.txt.
+- Esta adaptação Python é independente do runtime Java do Shimeji-ee.
 
-O repositório Color Gang contém atualmente um sprite PNG estático por personagem. Por isso, esta primeira implementação movimenta os sprites existentes pela tela e simula pulos, mas ainda não possui ciclos completos de caminhada, dança, escalada ou interações animadas. Esses movimentos dependem de sequências adicionais de frames.
-
-Esta é uma implementação Python independente, não uma tradução linha por linha do aplicativo Java original. Os arquivos Java compilados e os sprites de terceiros do projeto de referência não foram copiados para este repositório.
-
-## Testes
-
-Execute a partir da pasta principal:
-
-```powershell
-py -3 -m unittest discover -s tests -v
-```
-
-## Créditos e referências
-
-- Projeto de referência: [Skittlq/alan-beckers-stickfigures-unofficial](https://github.com/Skittlq/alan-beckers-stickfigures-unofficial).
-- Base conceitual Shimeji-ee: [Kilkakon's Shimeji](https://kilkakon.com/shimeji/).
-- Os sprites usados por este aplicativo são os cinco arquivos PNG já presentes neste repositório.
+Veja THIRD_PARTY_NOTICES.md para os avisos de terceiros.

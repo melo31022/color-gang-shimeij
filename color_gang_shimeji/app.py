@@ -1,4 +1,4 @@
-"""Tkinter desktop-pet application for Windows."""
+"""Animated desktop pets driven by the original Shimeji-ee assets."""
 from __future__ import annotations
 
 import ctypes
@@ -8,11 +8,14 @@ import random
 import sys
 import time
 import tkinter as tk
+from collections import OrderedDict
 from pathlib import Path
 from tkinter import messagebox
 
-from .core import Character, load_catalog
-from .motion import choose_direction, clamp
+from PIL import Image, ImageOps, ImageTk
+
+from .assets import CHARACTERS, ensure_assets
+from .core import AnimationFrame, CharacterAssets, load_character_assets
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -20,21 +23,17 @@ TRANSPARENT_COLOR = "#ff00ff"
 
 DEFAULT_SETTINGS = {
     "start_all_characters": True,
-    "max_characters": 12,
+    "max_characters": 20,
     "speed": 1.35,
     "tick_ms": 32,
-    "gravity": 0.46,
-    "jump_strength": 8.2,
-    "jump_probability": 0.0018,
-    "idle_min_seconds": 0.8,
-    "idle_max_seconds": 2.8,
-    "walk_min_seconds": 1.4,
-    "walk_max_seconds": 4.2,
+    "random_action_min_seconds": 3.0,
+    "random_action_max_seconds": 9.0,
+    "dance_probability": 0.22,
+    "sit_probability": 0.20,
 }
 
 
 def load_settings(project_root: Path) -> dict:
-    """Read settings.json, filling in omitted values with safe defaults."""
     path = project_root / "settings.json"
     if not path.exists():
         return DEFAULT_SETTINGS.copy()
@@ -42,29 +41,31 @@ def load_settings(project_root: Path) -> dict:
     try:
         supplied = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
-        raise ValueError(f"Invalid JSON in {path}: {exc}") from exc
-
+        raise ValueError(f"JSON inválido em {path}: {exc}") from exc
     if not isinstance(supplied, dict):
-        raise ValueError("settings.json must contain a JSON object.")
+        raise ValueError("settings.json precisa conter um objeto JSON.")
 
     settings = DEFAULT_SETTINGS | supplied
     settings["max_characters"] = max(1, min(50, int(settings["max_characters"])))
     settings["tick_ms"] = max(16, min(100, int(settings["tick_ms"])))
-    settings["speed"] = clamp(float(settings["speed"]), 0.2, 8.0)
-    settings["gravity"] = clamp(float(settings["gravity"]), 0.1, 2.0)
-    settings["jump_strength"] = clamp(float(settings["jump_strength"]), 2.0, 20.0)
-    settings["jump_probability"] = clamp(float(settings["jump_probability"]), 0.0, 0.02)
-    for low, high in (
-        ("idle_min_seconds", "idle_max_seconds"),
-        ("walk_min_seconds", "walk_max_seconds"),
-    ):
-        settings[low] = max(0.1, float(settings[low]))
-        settings[high] = max(settings[low], float(settings[high]))
+    settings["speed"] = max(0.2, min(8.0, float(settings["speed"])))
+    settings["dance_probability"] = max(
+        0.0, min(1.0, float(settings["dance_probability"]))
+    )
+    settings["sit_probability"] = max(
+        0.0, min(1.0, float(settings["sit_probability"]))
+    )
+    settings["random_action_min_seconds"] = max(
+        0.5, float(settings["random_action_min_seconds"])
+    )
+    settings["random_action_max_seconds"] = max(
+        settings["random_action_min_seconds"],
+        float(settings["random_action_max_seconds"]),
+    )
     return settings
 
 
 def get_work_area(root: tk.Tk) -> tuple[int, int, int, int]:
-    """Return the Windows desktop work area, excluding the taskbar."""
     if os.name == "nt":
         class RECT(ctypes.Structure):
             _fields_ = [
@@ -87,35 +88,61 @@ def get_work_area(root: tk.Tk) -> tuple[int, int, int, int]:
     return 0, 0, root.winfo_screenwidth(), root.winfo_screenheight()
 
 
-class DesktopPet:
-    """One transparent, always-on-top character window."""
+class FrameCache:
+    """Small LRU cache to avoid keeping every dance frame in RAM."""
 
+    def __init__(self, master: tk.Tk, capacity: int = 180) -> None:
+        self.master = master
+        self.capacity = capacity
+        self.cache: OrderedDict[tuple[Path, bool], ImageTk.PhotoImage] = OrderedDict()
+
+    def get(self, frame: AnimationFrame, mirror: bool) -> ImageTk.PhotoImage:
+        key = (frame.image, mirror)
+        cached = self.cache.get(key)
+        if cached is not None:
+            self.cache.move_to_end(key)
+            return cached
+
+        with Image.open(frame.image) as opened:
+            image = opened.convert("RGBA")
+        if mirror:
+            image = ImageOps.mirror(image)
+
+        photo = ImageTk.PhotoImage(image, master=self.master)
+        self.cache[key] = photo
+        self.cache.move_to_end(key)
+        while len(self.cache) > self.capacity:
+            self.cache.popitem(last=False)
+        return photo
+
+
+class DesktopPet:
     def __init__(
         self,
         app: "ShimejiApp",
-        character: Character,
-        photo: tk.PhotoImage,
-        x: float,
+        character: CharacterAssets,
+        x: int,
     ) -> None:
         self.app = app
         self.character = character
-        self.photo = photo
-        self.width = photo.width()
-        self.height = photo.height()
-
         self.left, self.top, self.right, self.bottom = app.work_area
-        self.x = clamp(x, self.left, max(self.left, self.right - self.width))
-        self.ground_y = max(self.top, self.bottom - self.height)
-        self.y = float(self.ground_y)
+        self.x = float(x)
+        self.y = float(self.bottom - 128)
+        self.width = 128
+        self.height = 128
 
-        self.direction = choose_direction()
-        self.mode = "walk"
-        self.velocity_y = 0.0
+        self.direction = random.choice((-1, 1))
+        self.action_name = ""
+        self.frames: tuple[AnimationFrame, ...] = ()
+        self.frame_index = 0
+        self.frame_elapsed = 0.0
+        self.photo: ImageTk.PhotoImage | None = None
+        self.last_geometry: tuple[int, int] | None = None
         self.dragging = False
         self.drag_offset_x = 0
         self.drag_offset_y = 0
-        self.next_decision = time.monotonic() + random.uniform(0.5, 2.0)
-        self.last_geometry: tuple[int, int] | None = None
+        self.next_decision = time.monotonic() + random.uniform(2.0, 6.0)
+        self.action_loop = True
 
         self.window = tk.Toplevel(app.root)
         self.window.overrideredirect(True)
@@ -126,13 +153,12 @@ class DesktopPet:
         except tk.TclError as exc:
             self.window.destroy()
             raise RuntimeError(
-                "A transparência por cor não está disponível nesta instalação do Tk. "
-                "Use Python para Windows com Tcl/Tk 8.6."
+                "O Tk instalado não oferece transparência por cor. "
+                "Use Python para Windows com Tk 8.6."
             ) from exc
 
         self.label = tk.Label(
             self.window,
-            image=self.photo,
             bg=TRANSPARENT_COLOR,
             borderwidth=0,
             highlightthickness=0,
@@ -146,6 +172,49 @@ class DesktopPet:
         self.label.bind("<ButtonRelease-1>", self.on_drag_end)
         self.label.bind("<Button-3>", self.on_context_menu)
 
+        initial = "Stand" if "Stand" in character.animations else next(iter(character.animations))
+        self.set_action(initial)
+        self.render()
+
+    def _mirror_for(self, frame: AnimationFrame) -> bool:
+        default_direction = -1 if frame.velocity_x < 0 else 1
+        if frame.velocity_x == 0:
+            default_direction = -1
+        return self.direction != default_direction
+
+    def set_action(
+        self,
+        name: str,
+        *,
+        direction: int | None = None,
+        loop: bool = True,
+    ) -> None:
+        if direction in (-1, 1):
+            self.direction = direction
+
+        frames = self.character.clip(name)
+        if not frames:
+            fallback = self.character.animations.get("Stand")
+            if not fallback:
+                return
+            name = "Stand"
+            frames = fallback
+
+        self.action_name = name
+        self.frames = frames
+        self.frame_index = 0
+        self.frame_elapsed = 0.0
+        self.action_loop = loop
+        self.show_frame()
+
+    def show_frame(self) -> None:
+        if not self.frames:
+            return
+        frame = self.frames[self.frame_index]
+        self.photo = self.app.frame_cache.get(frame, self._mirror_for(frame))
+        self.width = self.photo.width()
+        self.height = self.photo.height()
+        self.label.configure(image=self.photo)
         self.render()
 
     def render(self) -> None:
@@ -156,77 +225,101 @@ class DesktopPet:
             )
             self.last_geometry = position
 
-    def step(self, now: float) -> None:
+    def _choose_random_action(self, now: float) -> None:
+        available = self.character.animations
+        choices: list[str] = []
+
+        if "Walk" in available:
+            choices.extend(["Walk"] * 5)
+        if "Stand" in available:
+            choices.extend(["Stand"] * 3)
+        if "Sit" in available and random.random() < self.app.settings["sit_probability"]:
+            choices.extend(["Sit"] * 3)
+        if "Dance" in available and random.random() < self.app.settings["dance_probability"]:
+            choices.extend(["Dance"] * 4)
+        if "Sprawl" in available and random.random() < 0.12:
+            choices.append("Sprawl")
+        if "Tripping" in available and random.random() < 0.06:
+            choices.append("Tripping")
+
+        if not choices:
+            choices = list(available)
+        action = random.choice(choices)
+        direction = random.choice((-1, 1)) if action in {"Walk", "Run", "Dash"} else None
+        self.set_action(action, direction=direction)
+        self.next_decision = now + random.uniform(
+            self.app.settings["random_action_min_seconds"],
+            self.app.settings["random_action_max_seconds"],
+        )
+
+    def step(self, delta_ms: float, now: float) -> None:
         if self.dragging:
             return
 
-        settings = self.app.settings
+        if now >= self.next_decision:
+            self._choose_random_action(now)
 
-        if self.y < self.ground_y or self.velocity_y != 0:
-            self.y += self.velocity_y
-            self.velocity_y += settings["gravity"]
-            if self.y >= self.ground_y:
-                self.y = float(self.ground_y)
-                self.velocity_y = 0.0
+        if self.action_name in {"Walk", "Run", "Dash", "RunAffordance"}:
+            frame = self.frames[self.frame_index]
+            source_speed = abs(frame.velocity_x) or 4.0
+            speed_scale = max(0.65, min(2.8, source_speed / 4.0))
+            self.x += (
+                self.direction
+                * self.app.settings["speed"]
+                * speed_scale
+                * (delta_ms / 32.0)
+            )
 
-        if self.velocity_y == 0 and now >= self.next_decision:
-            if random.random() < 0.38:
-                self.mode = "idle"
-                self.direction = 0
-                self.next_decision = now + random.uniform(
-                    settings["idle_min_seconds"], settings["idle_max_seconds"]
-                )
+            max_x = max(self.left, self.right - self.width)
+            if self.x <= self.left:
+                self.x = float(self.left)
+                self.set_action("Walk", direction=1)
+            elif self.x >= max_x:
+                self.x = float(max_x)
+                self.set_action("Walk", direction=-1)
+
+        self.frame_elapsed += delta_ms
+        advanced = False
+        while self.frames and self.frame_elapsed >= self.frames[self.frame_index].duration_ms:
+            self.frame_elapsed -= self.frames[self.frame_index].duration_ms
+            if self.frame_index + 1 < len(self.frames):
+                self.frame_index += 1
+            elif self.action_loop:
+                self.frame_index = 0
             else:
-                self.mode = "walk"
-                self.direction = choose_direction()
-                self.next_decision = now + random.uniform(
-                    settings["walk_min_seconds"], settings["walk_max_seconds"]
-                )
+                self.set_action("Stand")
+                break
+            advanced = True
 
-        if self.mode == "walk":
-            self.x += self.direction * settings["speed"]
-
-        if self.x <= self.left:
-            self.x = float(self.left)
-            self.direction = 1
-            self.mode = "walk"
-        elif self.x >= self.right - self.width:
-            self.x = float(max(self.left, self.right - self.width))
-            self.direction = -1
-            self.mode = "walk"
-
-        if self.velocity_y == 0 and random.random() < settings["jump_probability"]:
-            self.velocity_y = -settings["jump_strength"]
-
+        if advanced:
+            self.show_frame()
         self.render()
 
     def on_drag_start(self, event: tk.Event) -> None:
         self.dragging = True
-        self.direction = 0
-        self.mode = "idle"
-        self.velocity_y = 0.0
-        self.drag_offset_x = event.x_root - self.x
-        self.drag_offset_y = event.y_root - self.y
+        self.drag_offset_x = event.x_root - round(self.x)
+        self.drag_offset_y = event.y_root - round(self.y)
         self.window.lift()
+        if "Pinched" in self.character.animations:
+            self.set_action("Pinched")
 
     def on_drag_motion(self, event: tk.Event) -> None:
         if not self.dragging:
             return
-        self.x = clamp(
-            event.x_root - self.drag_offset_x,
+        self.x = max(
             self.left,
-            max(self.left, self.right - self.width),
+            min(self.right - self.width, event.x_root - self.drag_offset_x),
         )
-        self.y = clamp(
-            event.y_root - self.drag_offset_y,
+        self.y = max(
             self.top,
-            max(self.top, self.bottom - self.height),
+            min(self.bottom - self.height, event.y_root - self.drag_offset_y),
         )
         self.render()
 
     def on_drag_end(self, _event: tk.Event) -> None:
         self.dragging = False
-        self.next_decision = time.monotonic() + random.uniform(0.5, 1.5)
+        self.set_action("Stand")
+        self.next_decision = time.monotonic() + random.uniform(1.0, 3.0)
 
     def on_context_menu(self, event: tk.Event) -> None:
         self.app.show_context_menu(self, event)
@@ -243,48 +336,44 @@ class DesktopPet:
 
 
 class ShimejiApp:
-    def __init__(self, root: tk.Tk) -> None:
+    def __init__(
+        self,
+        root: tk.Tk,
+        characters: list[CharacterAssets],
+        settings: dict,
+    ) -> None:
         self.root = root
         self.root.withdraw()
-        self.settings = load_settings(PROJECT_ROOT)
-        self.characters = load_catalog(PROJECT_ROOT)
+        self.characters = characters
+        self.settings = settings
         self.work_area = get_work_area(root)
-        self.photos: dict[str, tk.PhotoImage] = {}
+        self.frame_cache = FrameCache(root)
         self.pets: list[DesktopPet] = []
         self.paused = False
         self.running = True
+        self.last_tick = time.monotonic()
 
-        self.root.title("Color Gang Shimeji")
+        self.root.title("Color Gang Shimeji - Python")
         self.root.protocol("WM_DELETE_WINDOW", self.close)
         self.spawn_initial_characters()
         self.root.after(self.settings["tick_ms"], self.tick)
 
-    def get_photo(self, character: Character) -> tk.PhotoImage:
-        photo = self.photos.get(character.character_id)
-        if photo is None:
-            photo = tk.PhotoImage(master=self.root, file=str(character.sprite))
-            self.photos[character.character_id] = photo
-        return photo
-
-    def add_pet(self, character: Character, x: float | None = None) -> None:
+    def add_pet(
+        self,
+        character: CharacterAssets,
+        x: int | None = None,
+    ) -> None:
         if len(self.pets) >= self.settings["max_characters"]:
             return
 
-        photo = self.get_photo(character)
-        left, _top, right, _bottom = self.work_area
-        available = max(0, right - left - photo.width())
         if x is None:
-            x = random.randint(left, left + available) if available else left
-
-        pet = DesktopPet(self, character, photo, x)
+            left, _top, right, _bottom = self.work_area
+            x = random.randint(left, max(left, right - 128))
+        pet = DesktopPet(self, character, x)
         self.pets.append(pet)
 
     def spawn_initial_characters(self) -> None:
-        if self.settings["start_all_characters"]:
-            selected = self.characters
-        else:
-            selected = self.characters[:1]
-
+        selected = self.characters if self.settings["start_all_characters"] else self.characters[:1]
         for character in selected[: self.settings["max_characters"]]:
             self.add_pet(character)
 
@@ -295,20 +384,38 @@ class ShimejiApp:
 
     def toggle_pause(self) -> None:
         self.paused = not self.paused
-        if not self.paused:
-            now = time.monotonic()
-            for pet in self.pets:
-                pet.next_decision = now + random.uniform(0.2, 1.0)
 
     def show_context_menu(self, pet: DesktopPet, event: tk.Event) -> None:
         menu = tk.Menu(self.root, tearoff=0)
         add_menu = tk.Menu(menu, tearoff=0)
         for character in self.characters:
             add_menu.add_command(
-                label=character.name,
+                label=character.display_name,
                 command=lambda item=character: self.add_pet(item),
             )
         menu.add_cascade(label="Adicionar personagem", menu=add_menu)
+
+        animation_menu = tk.Menu(menu, tearoff=0)
+        preferred = [
+            ("Stand", "Parado"),
+            ("Walk", "Caminhar"),
+            ("Run", "Correr"),
+            ("Sit", "Sentar"),
+            ("Dance", "Dançar"),
+            ("Sprawl", "Deitar"),
+            ("Tripping", "Tropeçar"),
+        ]
+        added = 0
+        for key, label in preferred:
+            if key in pet.character.animations:
+                animation_menu.add_command(
+                    label=label,
+                    command=lambda action=key: pet.set_action(action),
+                )
+                added += 1
+        if added:
+            menu.add_cascade(label="Animação", menu=animation_menu)
+
         menu.add_command(
             label="Retomar todos" if self.paused else "Pausar todos",
             command=self.toggle_pause,
@@ -318,7 +425,7 @@ class ShimejiApp:
             command=lambda: [item.bring_to_front() for item in self.pets],
         )
         menu.add_command(
-            label=f"Remover {pet.character.name}",
+            label=f"Remover {pet.character.display_name}",
             command=lambda: self.remove_pet(pet),
         )
         menu.add_separator()
@@ -332,10 +439,14 @@ class ShimejiApp:
     def tick(self) -> None:
         if not self.running:
             return
+        now = time.monotonic()
+        delta_ms = max(1.0, min(100.0, (now - self.last_tick) * 1000.0))
+        self.last_tick = now
+
         if not self.paused:
-            now = time.monotonic()
             for pet in tuple(self.pets):
-                pet.step(now)
+                pet.step(delta_ms, now)
+
         self.root.after(self.settings["tick_ms"], self.tick)
 
     def close(self) -> None:
@@ -354,15 +465,24 @@ def main() -> int:
         return 1
 
     try:
+        print("Color Gang Shimeji: verificando os assets...")
+        image_root = ensure_assets(PROJECT_ROOT, progress=print)
+        characters = load_character_assets(image_root, CHARACTERS)
+        settings = load_settings(PROJECT_ROOT)
+
         root = tk.Tk()
-        ShimejiApp(root)
+        ShimejiApp(root, characters, settings)
         root.mainloop()
         return 0
-    except (OSError, ValueError, FileNotFoundError, RuntimeError, tk.TclError) as exc:
+    except Exception as exc:
+        message = (
+            f"Não foi possível iniciar o Color Gang Shimeji.\n\n{exc}\n\n"
+            "Confira sua conexão com a internet na primeira execução."
+        )
         try:
-            messagebox.showerror("Color Gang Shimeji", str(exc))
+            messagebox.showerror("Color Gang Shimeji", message)
         except tk.TclError:
-            print(f"Color Gang Shimeji: {exc}", file=sys.stderr)
+            print(message, file=sys.stderr)
         return 1
 
 
