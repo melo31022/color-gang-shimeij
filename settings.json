@@ -1,0 +1,13 @@
+{
+  "start_all_characters": true,
+  "max_characters": 12,
+  "speed": 1.35,
+  "tick_ms": 32,
+  "gravity": 0.46,
+  "jump_strength": 8.2,
+  "jump_probability": 0.0018,
+  "idle_min_seconds": 0.8,
+  "idle_max_seconds": 2.8,
+  "walk_min_seconds": 1.4,
+  "walk_max_seconds": 4.2
+}
