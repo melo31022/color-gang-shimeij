@@ -1,3 +1,3 @@
-"""Color Gang Shimeji - lightweight desktop pets for Windows."""
+"""Color Gang Shimeji - animated desktop pets using upstream assets."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

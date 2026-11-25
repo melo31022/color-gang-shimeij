@@ -9,12 +9,15 @@ if not errorlevel 1 (
     set "PYTHON=python"
 )
 
-%PYTHON% -m pip install -r requirements.txt
+%PYTHON% -c "import PIL" >nul 2>nul
 if errorlevel 1 (
-    echo.
-    echo Failed to install Python dependencies.
-    pause
-    exit /b 1
+    %PYTHON% -m pip install -r requirements.txt
+    if errorlevel 1 (
+        echo.
+        echo Failed to install Python dependencies.
+        pause
+        exit /b 1
+    )
 )
 
 %PYTHON% main.py
